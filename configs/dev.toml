@@ -7,5 +7,5 @@ Charset = "UTF-8"
 
 [Other]
 	MyServerName = "dev"
-  MyAddress = ":5000"
+  MyAddress = "192.168.1.194:5000"
   GoogleMapApiKey = ""
