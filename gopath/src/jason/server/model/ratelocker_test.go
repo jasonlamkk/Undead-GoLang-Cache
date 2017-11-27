@@ -33,8 +33,10 @@ func TestRateLock(t *testing.T) {
 
 	t.Run("accept task beyond rate limit, add to queue", func(t *testing.T) {
 
+		ctx, cancel := context.WithCancel(context.Background())
+
 		loc := NewRateLocker(fn, cancel, false, 2, time.Second*1)
-		loc.StartAsync()
+		loc.StartAsync(ctx)
 		loc.Dispatch("B")
 		loc.Dispatch("C")
 		loc.Dispatch("D")
@@ -48,6 +50,7 @@ func TestRateLock(t *testing.T) {
 			t.Error("task not accepted")
 		}
 		loc.Stop()
+		cancel()
 	})
 
 	t.Run("onCancel triggered if server shutdown", func(t *testing.T) {
@@ -72,7 +75,7 @@ func TestRateLock(t *testing.T) {
 				t.Error("oncancel shall not be here")
 			}
 		}, customCancel, false, 1, time.Second*1)
-		loc.StartAsync()
+		loc.StartAsync(ctx)
 
 		go func() {
 			loc.Dispatch("2A")

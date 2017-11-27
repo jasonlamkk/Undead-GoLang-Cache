@@ -1,0 +1,14 @@
+DisablePathCorrection = false
+EnablePathEscape = false
+FireMethodNotAllowed = true
+DisableBodyConsumptionOnUnmarshal = false
+TimeFormat = "Mon, 01 Jan 2006 15:04:05 GMT"
+Charset = "UTF-8"
+
+[Other]
+	MyServerName = "d04"
+  MyAddress = "192.168.1.194"
+  MyPortShift = 5420
+  JoinCluster = ["192.168.1.194:5000","192.168.1.194:5100","192.168.1.194:5200"]
+  ClusterAcceptPattern = "^192\\.168\\."
+  GoogleMapApiKey = ""

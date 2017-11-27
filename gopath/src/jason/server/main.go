@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
+	"runtime"
 	"syscall"
 	"time"
 
@@ -15,6 +15,8 @@ import (
 	"github.com/kataras/iris/middleware/logger"
 	"github.com/kataras/iris/middleware/recover"
 
+	"jason/server/cluster"
+	"jason/server/configstore"
 	"jason/server/controller"
 	"jason/server/model"
 )
@@ -27,15 +29,33 @@ func main() {
 	flag.Parse()
 
 	fmt.Println("start server with config: ", *flagConfigFile)
+
 	app := iris.New()
 	app.Use(recover.New())
 	app.Use(logger.New())
 
 	conf := iris.TOML(*flagConfigFile) //panic if not exists
 
-	var addrStr string
+	if tmp, ok := conf.Other["UseProcessors"]; ok {
+		if numUseProcessors, ok := tmp.(int64); ok {
+			fmt.Println("Limited number of processor to : ", numUseProcessors)
+			runtime.GOMAXPROCS(int(numUseProcessors))
+		}
+	}
+
+	var exIP string
+	var portShift int64
+	if tmp, ok := conf.Other["MyPortShift"]; ok {
+		portShift, ok = tmp.(int64)
+		if !ok {
+			fmt.Println("[ConfigError]", *flagConfigFile, "Other.MyPortShift must be int")
+		}
+	} else {
+		portShift = 0 //optional , default 0
+	}
+
 	if tmp, ok := conf.Other["MyAddress"]; ok {
-		addrStr, ok = tmp.(string)
+		exIP, ok = tmp.(string)
 		if !ok {
 			fmt.Println("[ConfigError]", *flagConfigFile, "Other.MyAddress must be string")
 			return
@@ -44,14 +64,27 @@ func main() {
 		fmt.Println("[ConfigError]", *flagConfigFile, "Other.MyAddress not found")
 		return
 	}
+
+	configstore.GetAddressStore().SetAddress(exIP, int(portShift))
+
+	if tmp, ok := conf.Other["ClusterAcceptPattern"]; ok {
+		ptn, ok := tmp.(string)
+		// fmt.Println("ClusterAcceptPattern", ptn)
+		if ok {
+			configstore.SetClusterAcceptPattern(ptn)
+		}
+	}
 	// -- end setup
 
-	//routes
-	addAllRoute(app)
+	//graceful stop logic
+	clusterCtx, clusterStopper := context.WithCancel(context.Background()) //stop later
 
-	model.StartModelCluster(getPureIP(addrStr))
+	serverCtx, serverStopper := context.WithCancel(clusterCtx) //stop earlier
+	//start supporting tasks
 
-	//graceful stop
+	model.StartBgTask(serverCtx)
+	defer model.StopBgTask()
+
 	go func() {
 		ch := make(chan os.Signal, 1)
 		signal.Notify(ch,
@@ -66,40 +99,44 @@ func main() {
 		)
 		select {
 		case <-ch:
-
-			println("leave cluster...")
-			model.StopModelCluster()
-
+			serverStopper()
 			println("shutdown...")
-			time.Sleep(time.Second)
-			timeout := 5 * time.Second
-			ctx, cancel := context.WithTimeout(context.Background(), timeout)
-			defer cancel()
-			app.Shutdown(ctx)
+			wait := 3 * time.Second                                           //wait 3 seconds for cluster
+			stopCtx, cancelStopCtx := context.WithTimeout(clusterCtx, 2*wait) //wait max 6 seconds for cluster to rebalance
+			go cluster.PublishRebalance(stopCtx)                              //fire rebalance
+			time.Sleep(wait)                                                  //wait 3 seconds, as incoming websocket depend on web server, server shutdown will harm rebalance
+			//leave cluster
+			clusterStopper()
+			defer cancelStopCtx()
+			app.Shutdown(stopCtx)
 		}
 	}()
 
-	// var config = iris.WithConfiguration(conf)
-	// config.DisableInterruptHandler = true
-	// start server
-	app.Run(iris.Addr(addrStr), iris.WithoutInterruptHandler, iris.WithConfiguration(conf))
+	//start controller routes
+	app.Post("/route", controller.HTTPRoutePost)
+	app.Get(controller.PathGetRoutePrefix+"{token:string regexp(^[a-f0-9]{8,8}-[a-f0-9]{4,4}-[a-f0-9]{4,4}-[a-f0-9]{4,4}-[a-f0-9]{12,12})}", controller.HTTPRouteGet)
 
-}
+	app.Get(cluster.RouteClusterSocket, cluster.GetWsHandler(clusterCtx))
+	//end controller routes
 
-//addAllRoute is the entry point for all controller routes, which shall be package private
-func addAllRoute(app *iris.Application) {
-
-	app.Post("/route", controller.HttpRoutePost)
-
-	app.Get("/route", controller.HttpRoutePost)
-
-	// app.Get("/route/{token:string regexp()}", httpRouteGet)
-}
-
-func getPureIP(addr string) string {
-	end := strings.Index(addr, ":")
-	if end < 0 {
-		return addr
+	if tmp, ok := conf.Other["JoinCluster"]; ok {
+		fmt.Println("init peers:", tmp)
+		if peers, ok := tmp.([]interface{}); ok {
+			cluster.JoinCluster(clusterCtx, peers)
+		}
 	}
-	return addr[:end]
+
+	// start server
+	serverAddr := configstore.GetAddressStore().GetServerAddress()
+	fmt.Println("Starting server on:", serverAddr)
+	app.Run(iris.Addr(serverAddr), iris.WithoutInterruptHandler, iris.WithConfiguration(conf))
+	clusterStopper() //ensure stop, if not called ; no drawback
 }
+
+// func getPureIP(addr string) string {
+// 	end := strings.Index(addr, ":")
+// 	if end < 0 {
+// 		return addr
+// 	}
+// 	return addr[:end]
+// }

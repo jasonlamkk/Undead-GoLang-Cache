@@ -6,6 +6,11 @@ TimeFormat = "Mon, 01 Jan 2006 15:04:05 GMT"
 Charset = "UTF-8"
 
 [Other]
-	MyServerName = "dev"
-  MyAddress = "192.168.1.194:5000"
+  UseProcessors = 2
+	MyServerName = "d01"
+  MyAddress = "192.168.1.194"
+  MyPortShift = 4920
+#  JoinCluster = ["192.168.1.194:5100","192.168.1.194:5200"]
+  JoinCluster = [] #testing setting, make first node know 0 peer
+  ClusterAcceptPattern = "^192\\.168\\."
   GoogleMapApiKey = ""

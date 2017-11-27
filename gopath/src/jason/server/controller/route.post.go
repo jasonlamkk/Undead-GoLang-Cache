@@ -3,11 +3,12 @@ package controller
 import (
 	"github.com/kataras/iris/context"
 
+	"jason/server/cluster"
 	"jason/server/model"
 )
 
-//HttpRoutePost controller for /route
-func HttpRoutePost(ctx context.Context) {
+//HTTPRoutePost controller for /route
+func HTTPRoutePost(ctx context.Context) {
 	var input = make([][]string, 0)
 	if err := ctx.ReadJSON(&input); err != nil {
 		//always http 200
@@ -15,10 +16,12 @@ func HttpRoutePost(ctx context.Context) {
 		return
 	}
 
-	token, err := model.RegisterRouteRequestAsync(input)
+	token, expire, err := model.RegisterRouteRequestAsync(input)
 	if err != nil {
 		ctx.JSON(makeErrorResponse(err))
 		return
 	}
 	ctx.JSON(map[string]string{"token": token})
+
+	go cluster.PublishRouteOwnership(token, expire)
 }
