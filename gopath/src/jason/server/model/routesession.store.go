@@ -2,6 +2,7 @@ package model
 
 import (
 	"fmt"
+	"jason/server/network"
 	"sync"
 	"time"
 
@@ -64,10 +65,19 @@ func getRouteRequestStore() *routeRequestStore {
 
 func (s *routeRequestStore) getLocaleRouteByToken(token string) (r []byte, exists, ready bool) {
 	//local
-	if tmp, ok := s.result[token]; ok {
+	s.rMutex.RLock()
+	tmp, ok := s.result[token]
+	s.rMutex.RUnlock()
+
+	if ok {
 		return tmp, true, true
 	}
-	if _, ok := s.pending[token]; ok {
+
+	s.pMutex.RLock()
+	_, ok = s.pending[token]
+	s.pMutex.RUnlock()
+
+	if ok {
 		return nil, true, false
 	}
 
@@ -159,4 +169,21 @@ func (s *routeRequestStore) exportResults() (map[string][]byte, map[int64][]stri
 	defer s.rMutex.RUnlock()
 	s.rMutex.RLock()
 	return s.result, s.resultExpire
+}
+
+func GetRouteRequestStoreForInject() network.KeyValueInjecter {
+	return getRouteRequestStore()
+}
+
+//implement network.KeyValueInjector
+func (s *routeRequestStore) InjectResult(key string, output []byte, expire int64) {
+
+	s.rMutex.Lock()
+	s.result[key] = output
+	s.resultExpire[expire] = append(s.resultExpire[expire], key)
+	s.rMutex.Unlock()
+
+	s.pMutex.Lock()
+	delete(s.pending, key)
+	s.pMutex.Unlock()
 }

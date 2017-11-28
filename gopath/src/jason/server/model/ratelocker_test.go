@@ -12,7 +12,7 @@ func init() {
 }
 func TestRateLock(t *testing.T) {
 
-	fn := func(id string, payload interface{}) {
+	fn := func(ctx context.Context, id string, payload interface{}) {
 		t.Log("task run:", payload, ", auto token:", id, time.Now().UnixNano())
 		time.Sleep(time.Millisecond * 500)
 	}
@@ -66,7 +66,7 @@ func TestRateLock(t *testing.T) {
 			}
 		}
 
-		loc := NewRateLocker(func(id string, payload interface{}) {
+		loc := NewRateLocker(func(ctx context.Context, id string, payload interface{}) {
 			t.Log("task run:", payload, ", auto token:", id, time.Now().UnixNano())
 			if payload.(string) == "Blocker" {
 				time.Sleep(time.Second * 2)

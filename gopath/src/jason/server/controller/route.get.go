@@ -2,7 +2,6 @@ package controller
 
 import (
 	"encoding/json"
-	"fmt"
 	"io"
 	"jason/server/model"
 	"net/http"
@@ -35,12 +34,12 @@ func init() {
 func HTTPRouteGet(ctx context.Context) {
 	var token = ctx.Params().Get("token")
 
-	fmt.Println("check token", token)
+	// fmt.Println("check token", token)
 	localResult, peerAddress, isLocal, isReady, isPeer := model.GetRouteByToken(token)
 
-	fmt.Println(">>>local?", isLocal, ">>>ready?", isReady, ">>>", localResult)
+	// fmt.Println(">>>local?", isLocal, ">>>ready?", isReady, ">>>", localResult)
 
-	fmt.Println(">>>peer?", isPeer, peerAddress)
+	// fmt.Println(">>>peer?", isPeer, peerAddress)
 
 	if !isLocal {
 		if !isPeer || peerAddress == "" {
@@ -59,7 +58,7 @@ func HTTPRouteGet(ctx context.Context) {
 		req, _ := http.NewRequest("GET", "http://"+peerAddress+PathGetRoutePrefix+token, nil)
 		req.Header = oldReq.Header
 
-		fmt.Println("proxy", "http://"+peerAddress+PathGetRoutePrefix+token, req.Header)
+		// fmt.Println("proxy", "http://"+peerAddress+PathGetRoutePrefix+token, req.Header)
 
 		var client = http.Client{Timeout: time.Second}
 		resp, err := client.Do(req)

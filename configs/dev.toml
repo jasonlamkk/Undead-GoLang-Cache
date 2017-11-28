@@ -13,4 +13,4 @@ Charset = "UTF-8"
 #  JoinCluster = ["192.168.1.194:5100","192.168.1.194:5200"]
   JoinCluster = [] #testing setting, make first node know 0 peer
   ClusterAcceptPattern = "^192\\.168\\."
-  GoogleMapApiKey = ""
+  GoogleMapApiKey = "AIzaSyDUrgueHFhnQNgOiLY3h3113Y7uj5wgoTU"

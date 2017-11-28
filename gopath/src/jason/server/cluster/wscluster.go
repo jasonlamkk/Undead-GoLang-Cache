@@ -103,7 +103,7 @@ func init() {
 // }
 
 func addPeer(isIncoming bool, addr string, conn network.SendCloser) {
-	fmt.Println("register peer", isIncoming, addr)
+	// fmt.Println("register peer", isIncoming, addr)
 	var p = peer{}
 	if isIncoming {
 		p.status = ePeerStatusIncoming
@@ -121,6 +121,7 @@ func addPeer(isIncoming bool, addr string, conn network.SendCloser) {
 	if exists && old != nil && old.conn != nil {
 		old.conn.Close()
 	}
+	// fmt.Println("hosts", len(knownHosts))
 }
 
 //disconnect  and don't keep history, another possible way it set status = ePeerStatusKnownOffline
@@ -170,6 +171,7 @@ func handleRemoteRebalance(message []byte) {
 	}
 	result := message[lenInt64+lenToken:]
 	rebalanceInjector.InjectResult(u.String(), result, expire)
+	PublishRouteOwnership(u.String(), expire)
 }
 
 //PublishRouteOwnership Publish Route Ownership and expire time
@@ -184,19 +186,20 @@ func PublishRouteOwnership(token string, expire int64) {
 		return
 	}
 
-	fmt.Println("Publishing", token, expire, msg)
+	// fmt.Println("Publishing", token, expire, msg, len(knownHosts))
 
 	var count = 0
 	var tmp []*peer
 	connMutex.RLock()
 	tmp = make([]*peer, len(knownHosts))
 	for _, p := range knownHosts {
+		// fmt.Println("loop host ", count, p)
 		tmp[count] = p
 		count++
 	}
 	connMutex.RUnlock()
 
-	fmt.Println("to hosts", tmp)
+	// fmt.Println("to hosts", tmp)
 
 	for _, p := range tmp {
 		if p != nil && p.conn != nil {
@@ -246,7 +249,7 @@ func PublishRebalance(gracefulCtx stdCtx.Context) {
 				return //
 			}
 			if data, ok := datas[tk]; ok {
-				sIdx = (sIdx + 1) % maxIdx
+				sIdx = (sIdx + 1) % (maxIdx + 1)
 				var tmp = tmpRebalanceRoute{tk, xt, data}
 
 				if _, dontuse := failConns[sIdx]; dontuse {
@@ -364,7 +367,7 @@ func serializeKnownRequest(token string, expire int64) (buf []byte, err error) {
 	buf = make([]byte, 2+lenInt64+lenToken)
 	copy(buf[0:2], []byte(simpleMessageTypeReq))
 	binary.LittleEndian.PutUint64(buf[2:2+lenInt64], uint64(expire))
-	fmt.Println(">>>", uid.Bytes())
+	// fmt.Println(">>>", uid.Bytes())
 	copy(buf[2+lenInt64:2+lenInt64+lenToken], uid.Bytes())
 	return buf, nil
 }
@@ -396,7 +399,7 @@ func handleWhoKnowWhich(from string, payload []byte) {
 
 	token, expire, ok := parseKnowRequest(payload)
 
-	// fmt.Println("handle who know:", token, expire, ok, (payload))
+	fmt.Println("handle who know:", token, expire, ok, (payload))
 
 	if !ok {
 		return //ignore
@@ -405,7 +408,7 @@ func handleWhoKnowWhich(from string, payload []byte) {
 
 	model.GetRouteOwnershipStore().AddRouteOwnership(from, token, expire)
 
-	fmt.Println(">>>", from, token, expire)
+	// fmt.Println(">>>", from, token, expire)
 }
 
 func tryConnect(ctx stdCtx.Context, peerAddr string) error {
@@ -419,7 +422,7 @@ func tryConnect(ctx stdCtx.Context, peerAddr string) error {
 		return err
 	}
 	//  else {
-	fmt.Println("Peer connected", url)
+	fmt.Println("connected to new peer", url)
 	// }
 	go startSocket(ctx, c, myself, false)
 	return nil
@@ -448,6 +451,7 @@ func tryConnect(ctx stdCtx.Context, peerAddr string) error {
 // }
 
 func handleIncomingTextMessage(ctx stdCtx.Context, from string, message []byte) {
+	fmt.Println("in , ", from, string(message))
 	switch string(string(message[:2])) {
 	case simpleMessageTypePeer:
 		handlePeersPeer(ctx, message[2:])
@@ -463,7 +467,7 @@ func handleIncomingTextMessage(ctx stdCtx.Context, from string, message []byte) 
 	}
 }
 
-func forwardRouteOwnership(c *wsc.Conn, addr, token string, expire int64) error {
+func forwardRouteOwnership(c network.SendCloser, addr, token string, expire int64) error {
 	buf, err := serializeKnownRequest(token, expire)
 	if err != nil {
 		panic(err) //assert never happen ; if format error , then always error and break connection
@@ -495,7 +499,7 @@ func sendRebalanceRecord(c network.SendCloser, r *tmpRebalanceRoute) error {
 	return nil
 }
 
-func welcomeNewJoiner(c *wsc.Conn) {
+func welcomeNewJoiner(c network.SendCloser) {
 	whoKnows, whenExpire := model.GetRouteOwnershipStore().ExportTokenOwners()
 
 	if whoKnows != nil && len(whoKnows) > 0 && whenExpire != nil && len(whenExpire) > 0 {
@@ -539,21 +543,28 @@ func startSocket(ctx stdCtx.Context, c *wsc.Conn, myHTTPAddress []byte, isIncomi
 			// c.WriteMessage(wsc.TextMessage, []byte(simpleMessageTypeDying))
 
 		}
-		fmt.Println("p", ctx.Err(), "sub", myCtx.Err())
+		// fmt.Println("p", ctx.Err(), "sub", myCtx.Err())
 		c.Close()
 		cancelCtx()
 		fmt.Println("!! Socket closed")
 	}()
 
+	var sendCloseWrapper = network.NewProtectedSocket(c)
+
 	var remoteAddr string
 	var inited = false
 
-	go sendMyAddress(c, myHTTPAddress)
+	go func() {
+		// fmt.Println("A<<<<<<")
+		time.Sleep(time.Millisecond * 10)
 
-	go welcomeNewJoiner(c)
+		sendMyAddress(sendCloseWrapper, myHTTPAddress)
 
-	go publishMyPeer(c)
+		welcomeNewJoiner(sendCloseWrapper)
 
+		publishMyPeer(sendCloseWrapper)
+		// fmt.Println("sent init message")
+	}()
 loop:
 	for {
 		if myCtx.Err() != nil {
@@ -564,6 +575,7 @@ loop:
 			log.Println("Connection Closed:", err)
 			break
 		}
+		// fmt.Println("C<<<<<<", mt, message, err)
 		if mt != wsc.TextMessage {
 			continue
 		}
@@ -577,6 +589,7 @@ loop:
 
 		switch string(message[:2]) {
 		case simpleMessageTypeAddr:
+			// fmt.Println("receive addr")
 			remoteAddr = string(message[2:])
 			if !inited {
 				inited = true

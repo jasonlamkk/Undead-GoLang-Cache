@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sync"
+	"jason/server/configstore"
 	"time"
 )
 
@@ -25,21 +25,20 @@ func (o *pendingObject) expired() bool {
 
 //RateLocker limit the amount of task executed in set interval
 type RateLocker struct {
-	max      int                                  //never change
-	count    int                                  //single thread access
-	interval time.Duration                        //never change
-	mtx      sync.RWMutex                         //guard queue
-	async    bool                                 //shall the task be start in async way? ( async will burst in all pending requests in the begining of a interval )
-	runner   func(id string, payload interface{}) //normal execution of the task, with one piece of pending data
-	cancel   func(id string)                      //task not executed due to timeout / server stopping
-	queue    []*pendingObject                     //queue to hold payloads
-	ticker   *time.Ticker                         //time ticker to reset count
+	max      int                                                       //never change
+	count    int                                                       //single thread access
+	interval time.Duration                                             //never change
+	async    bool                                                      //shall the task be start in async way? ( async will burst in all pending requests in the begining of a interval )
+	runner   func(ctx context.Context, id string, payload interface{}) //normal execution of the task, with one piece of pending data
+	cancel   func(id string)                                           //task not executed due to timeout / server stopping
+	queue    chan *pendingObject                                       //queue to hold payloads
+	ticker   *time.Ticker                                              //time ticker to reset count
 	stopping bool
 	stopper  func()
 }
 
 //NewRateLocker Create new rateLocker object
-func NewRateLocker(normalProcHandler func(id string, payload interface{}), onCancelHandler func(id string), async bool, rate int, unit time.Duration) *RateLocker {
+func NewRateLocker(normalProcHandler func(ctx context.Context, id string, payload interface{}), onCancelHandler func(id string), async bool, rate int, unit time.Duration) *RateLocker {
 	var rl RateLocker
 	rl.max = rate
 	rl.count = 0
@@ -56,23 +55,31 @@ func NewRateLocker(normalProcHandler func(id string, payload interface{}), onCan
 
 //StartAsync - start the ratelocker
 func (rl *RateLocker) StartAsync(srvCtx context.Context) {
-	rl.queue = make([]*pendingObject, 0)
+	waitQueue := make(chan bool)
+	rl.queue = make(chan *pendingObject)
+	// rl.queue = make([]*pendingObject, 0)
 	rl.count = 0
 
 	rl.ticker = time.NewTicker(rl.interval)
 	var ctx context.Context
 	ctx, rl.stopper = context.WithCancel(srvCtx)
 
+	var limited bool
 	go func() {
-		fmt.Println("start!!!!")
+		fmt.Println("rate locker start!!!!")
 		//stop order : 1
 	loop:
 		for {
 			select {
-			case t := <-rl.ticker.C:
-				fmt.Println("rate locker ticked!", t, "total request / last period:", rl.count)
+			case <-rl.ticker.C:
+				// fmt.Println("rate locker ticked!", t, "total request / last period:", rl.count)
 				rl.count = 0
-				go getRouteRequestStore().cleanExpiredItems()
+				if limited {
+					waitQueue <- true
+					// fmt.Println("rate limite released")
+				}
+				GetRouteOwnershipStore().CleanExpired()
+				getRouteRequestStore().cleanExpiredItems()
 			case <-ctx.Done():
 				fmt.Println("rate locker stop!!!!")
 				break loop
@@ -82,22 +89,37 @@ func (rl *RateLocker) StartAsync(srvCtx context.Context) {
 		// 	fmt.Println("ticked!", t)
 		// 	rl.count = 0
 		// } // exits after tick.Stop()
-		fmt.Println("stoped....")
+		close(waitQueue)
 		rl.stopping = true
 		rl.stopper() // no side effect to call again
+		fmt.Println("rate locker stoped.")
 	}()
 
+	//work queue
 	go func() {
-		//stop order : 2
+		var last *pendingObject
+		var ok bool
 		for {
 			if ctx.Err() != nil {
-				fmt.Println("context ended")
+				// fmt.Println("context ended")
 				break
 			} // was ctx ended?
+			last, ok = <-rl.queue
+
+			if !ok {
+				fmt.Println("queue closed, shutting down")
+				break //
+			}
 
 			if rl.count > rl.max {
-				fmt.Println("sleep triggered due to time limit reached")
-				time.Sleep(rl.interval / 50) // wait if limit reached
+				// fmt.Println("sleep triggered due to time limit reached")
+				limited = true
+				_, ok = <-waitQueue
+				// fmt.Println("wait was releaseed", ok)
+				if !ok {
+					fmt.Println("queue closed, shutting down")
+					break //
+				}
 			}
 
 			if ctx.Err() != nil {
@@ -105,55 +127,31 @@ func (rl *RateLocker) StartAsync(srvCtx context.Context) {
 				break
 			} // was ctx ended?
 
-			var o *pendingObject
-			rl.mtx.RLock()
-			if len(rl.queue) > 0 {
-				o = rl.queue[0]
-				rl.queue = rl.queue[1:]
-			}
-			rl.mtx.RUnlock()
+			//good to go
+			// context.WithTimeout(ctx, time.Sec)
+			rl.runner(ctx, last.id, last.payload)
+			last = nil
+		}
 
-			if o != nil {
-				if o.expired() {
-					rl.cancel(o.id)
-					continue
-				} else {
-					rl.count++ //count is only accessed on single thread
-				}
-				if rl.async {
-					fmt.Println("task start async", o.id, o.payload)
-					go rl.runner(o.id, o.payload)
-				} else {
-					fmt.Println("task start sync", o.id, o.payload)
-					rl.runner(o.id, o.payload)
-					fmt.Println("task sync finish")
-				}
-			}
+		if last != nil {
+			rl.cancel(last.id)
 		}
-		//ctx ended
-		for _, o := range rl.queue {
-			rl.cancel(o.id)
-		}
-		rl.queue = nil //stop accept new tasks
-		rl.ticker = nil
-		if rl.stopper != nil {
-			rl.stopper() // no side effect to call again
-		}
+		rl.stopper() // no side effect to call again
 	}()
 	rl.stopping = false
 }
 
 //IsRunning - is the locker running?
 func (rl *RateLocker) IsRunning() bool {
-	return !rl.stopping && rl.queue != nil
+	return !rl.stopping && rl.queue != nil //not stopped and started
 }
 
 //Stop - stop the ratelocker
 func (rl *RateLocker) Stop() {
-	fmt.Println("Stop Locker")
+	// fmt.Println("Stop Locker")
 	rl.stopping = true // prevent accept new task when stopping
 	if rl.ticker != nil {
-		fmt.Println("Stop Ticker")
+		// fmt.Println("Stop Ticker")
 		rl.ticker.Stop()
 	}
 	if rl.stopper != nil {
@@ -162,19 +160,16 @@ func (rl *RateLocker) Stop() {
 }
 
 //Dispatch - dispatch a task with rate limit
-func (rl *RateLocker) Dispatch(payload interface{}) (token string, err error) {
+func (rl *RateLocker) Dispatch(payload interface{}) (token string, expire int64, err error) {
 	if !rl.IsRunning() {
-		return "", errors.New(msgErrRateLimitQueueNotRunning)
+		return "", 0, errors.New(msgErrRateLimitQueueNotRunning)
 	}
 	token = newToken()
-	po := pendingObject{
+	expire = time.Now().Add(configstore.RecordExpireInSeconds * time.Second).UnixNano()
+	rl.queue <- &pendingObject{
 		token,
 		payload,
-		time.Now().Add(time.Second * 30).UnixNano(),
+		expire,
 	}
-	rl.mtx.Lock()
-	rl.queue = append(rl.queue, &po)
-	rl.mtx.Unlock()
-
-	return token, nil
+	return token, expire, nil
 }

@@ -13,4 +13,4 @@ Charset = "UTF-8"
 #  JoinCluster = ["192.168.1.194:5000","192.168.1.194:5100"]
   JoinCluster = ["192.168.1.194:5100"] #testing setting, make 3rd node know only second node
   ClusterAcceptPattern = "^192\\.168\\."
-  GoogleMapApiKey = ""
+  GoogleMapApiKey = "AIzaSyDUrgueHFhnQNgOiLY3h3113Y7uj5wgoTU"

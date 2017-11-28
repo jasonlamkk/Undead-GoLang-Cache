@@ -21,7 +21,8 @@ func HTTPRoutePost(ctx context.Context) {
 		ctx.JSON(makeErrorResponse(err))
 		return
 	}
+	go cluster.PublishRouteOwnership(token, expire)
+
 	ctx.JSON(map[string]string{"token": token})
 
-	go cluster.PublishRouteOwnership(token, expire)
 }

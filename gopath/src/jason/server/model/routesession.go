@@ -3,7 +3,6 @@ package model
 import (
 	"context"
 	"errors"
-	"jason/server/configstore"
 	"time"
 
 	"github.com/satori/go.uuid"
@@ -51,9 +50,11 @@ func RegisterRouteRequestAsync(input [][]string) (token string, expire int64, er
 		}
 	}
 
-	token = newToken()
-	expire = time.Now().Add(configstore.RecordExpireInSeconds * time.Second).UnixNano()
-	err = nil
+	//update, let Dispatch generate token and expire time
+	token, expire, err = rateLimiterForRoute.Dispatch(input)
+	if err != nil {
+		return
+	}
 	go getRouteRequestStore().putRequest(token, expire, input)
 	return
 }

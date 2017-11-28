@@ -43,8 +43,20 @@ func main() {
 		}
 	}
 
-	var exIP string
+	var exIP, mapKey string
 	var portShift int64
+
+	if tmp, ok := conf.Other["GoogleMapApiKey"]; ok {
+		mapKey, ok = tmp.(string)
+		if !ok {
+			panic("Other.GoogleMapApiKey is not a string")
+		}
+	} else {
+		panic("Other.GoogleMapApiKey is required")
+	}
+
+	model.InitGoogleMapWithApiKey(mapKey)
+
 	if tmp, ok := conf.Other["MyPortShift"]; ok {
 		portShift, ok = tmp.(int64)
 		if !ok {
@@ -119,8 +131,11 @@ func main() {
 	app.Get(cluster.RouteClusterSocket, cluster.GetWsHandler(clusterCtx))
 	//end controller routes
 
+	//invoke SetRebalanceInjector
+	cluster.SetRebalanceInjector(model.GetRouteRequestStoreForInject())
+
 	if tmp, ok := conf.Other["JoinCluster"]; ok {
-		fmt.Println("init peers:", tmp)
+		// fmt.Println("init peers:", tmp)
 		if peers, ok := tmp.([]interface{}); ok {
 			cluster.JoinCluster(clusterCtx, peers)
 		}
@@ -128,7 +143,9 @@ func main() {
 
 	// start server
 	serverAddr := configstore.GetAddressStore().GetServerAddress()
-	fmt.Println("Starting server on:", serverAddr)
+	fmt.Println("------------------------------------------")
+	fmt.Println("-Starting server on:", serverAddr, "-")
+	fmt.Println("------------------------------------------")
 	app.Run(iris.Addr(serverAddr), iris.WithoutInterruptHandler, iris.WithConfiguration(conf))
 	clusterStopper() //ensure stop, if not called ; no drawback
 }
